@@ -2,6 +2,7 @@ module Main where
 
 import Control.Applicative
 import Control.Monad.State
+import Control.Monad.Trans.Except
 import Data.Char
 import qualified Data.Map.Strict as Map
 import Parser
@@ -18,7 +19,7 @@ data Op
 data ValueType
   = Var Variable
   | Number Int
-  deriving (Eq, Show)
+  deriving (Show, Eq)
 
 data Expr
   = Value ValueType
@@ -94,16 +95,15 @@ statement = inputStatement <|> outputStatement <|> replacementStatement
 
 type Vars = Map.Map String Int
 
-evalExpr :: Expr -> Vars -> Int
-evalExpr (Value (Var (Variable x))) vars =
-  case Map.lookup x vars of
-    Just v -> v
-    Nothing -> undefined
-evalExpr (Value (Number x)) _ = x
-evalExpr (Compute Add l r) vars = evalExpr l vars + evalExpr r vars
-evalExpr (Compute Sub l r) vars = evalExpr l vars - evalExpr r vars
+evalExpr :: Expr -> Vars -> Maybe Int
+evalExpr (Value (Var (Variable x))) vars = Just =<< Map.lookup x vars
+evalExpr (Value (Number x)) _ = Just x
+evalExpr (Compute Add l r) vars = (+) <$> evalExpr l vars <*> evalExpr r vars
+evalExpr (Compute Sub l r) vars = (-) <$> evalExpr l vars <*> evalExpr r vars
 
-eval :: Statement -> StateT Vars IO ()
+type Error = String
+
+eval :: Statement -> ExceptT Error (StateT Vars IO) ()
 eval (InputStatement (Variable x)) = do
   vars <- get
   y <- liftIO getLine
@@ -112,14 +112,13 @@ eval (OutputStatement (Variable x)) = do
   vars <- get
   case Map.lookup x vars of
     Just v -> liftIO $ print v
-    Nothing -> undefined
-  return ()
+    Nothing -> throwE $ "Variable '" ++ x ++ "' is undefined."
 eval (ReplacementStatement (Variable x) expression) = do
   vars <- get
-  let resultExpr = evalExpr expression vars
-  case Map.lookup x vars of
-    Just v -> put $ Map.adjust (const resultExpr) x vars
-    Nothing -> put $ Map.insert x resultExpr vars
+  case (Map.lookup x vars, evalExpr expression vars) of
+    (_, Nothing) -> throwE $ "Variable '" ++ x ++ "' is undefined."
+    (Nothing, Just resultExpr) -> put $ Map.insert x resultExpr vars
+    (Just v, Just resultExpr) -> put $ Map.adjust (const resultExpr) x vars
   return ()
 
 parseFile' :: FilePath -> Parser a -> IO (Maybe [a])
@@ -128,19 +127,23 @@ parseFile' fileName parser = do
   let linesOfFile = lines input
   return (traverse (fmap snd . runParser parser) linesOfFile)
 
-parseFile :: FilePath -> Parser Statement -> StateT Vars IO ()
+parseFile :: FilePath -> Parser Statement -> ExceptT Error (StateT Vars IO) ()
 parseFile fileName parser = do
   input <- liftIO $ readFile fileName
   let linesOfFile = lines input
   let mps = traverse (fmap snd . runParser parser) linesOfFile
   case mps of
     Just ps -> evalStatements ps
-    Nothing -> undefined
+    Nothing -> throwE "Syntax error"
 
-evalStatements :: [Statement] -> StateT Vars IO ()
+evalStatements :: [Statement] -> ExceptT Error (StateT Vars IO) ()
 evalStatements = mapM_ eval
+
+reportResult :: Either Error () -> IO ()
+reportResult (Right _) = pure ()
+reportResult (Left e) = putStrLn e
 
 main :: IO ()
 main = do
-  runStateT (parseFile "./input" statement) Map.empty
-  pure ()
+  r <- runStateT (runExceptT (parseFile "./input" statement)) Map.empty
+  reportResult $ fst r

@@ -21,3 +21,4 @@ executable Compiler
   build-depends:       base >= 4.7 && < 5
                        , mtl
                        , containers
+                       , transformers
