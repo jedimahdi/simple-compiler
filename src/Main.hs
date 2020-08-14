@@ -121,12 +121,6 @@ eval (ReplacementStatement (Variable x) expression) = do
     (Just v, Just resultExpr) -> put $ Map.adjust (const resultExpr) x vars
   return ()
 
-parseFile' :: FilePath -> Parser a -> IO (Maybe [a])
-parseFile' fileName parser = do
-  input <- readFile fileName
-  let linesOfFile = lines input
-  return (traverse (fmap snd . runParser parser) linesOfFile)
-
 parseFile :: FilePath -> Parser Statement -> ExceptT Error (StateT Vars IO) ()
 parseFile fileName parser = do
   input <- liftIO $ readFile fileName
